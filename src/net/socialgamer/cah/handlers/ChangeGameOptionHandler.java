@@ -16,7 +16,6 @@ import net.socialgamer.cah.RequestWrapper;
 import net.socialgamer.cah.data.Game;
 import net.socialgamer.cah.data.GameManager;
 import net.socialgamer.cah.data.User;
-import net.socialgamer.cah.db.CardSet;
 
 import com.google.inject.Inject;
 
@@ -43,15 +42,17 @@ public class ChangeGameOptionHandler extends GameWithPlayerHandler {
       try {
         final int scoreLimit = Integer.parseInt(request.getParameter(AjaxRequest.SCORE_LIMIT));
         final int playerLimit = Integer.parseInt(request.getParameter(AjaxRequest.PLAYER_LIMIT));
-        final int spectatorLimit = Integer.parseInt(request.getParameter(AjaxRequest.SPECTATOR_LIMIT));
+        final int spectatorLimit = Integer.parseInt(request
+            .getParameter(AjaxRequest.SPECTATOR_LIMIT));
+
         final String[] cardSetsParsed = request.getParameter(AjaxRequest.CARD_SETS).split(",");
-        final Set<CardSet> cardSets = new HashSet<CardSet>();
+        final Set<Integer> cardSetIds = new HashSet<Integer>();
         for (final String cardSetId : cardSetsParsed) {
           if (!cardSetId.isEmpty()) {
-            cardSets.add((CardSet) game.getHibernateSession().load(CardSet.class,
-                Integer.parseInt(cardSetId)));
+            cardSetIds.add(Integer.parseInt(cardSetId));
           }
         }
+
         final int blanksLimit = Integer.parseInt(request.getParameter(AjaxRequest.BLANKS_LIMIT));
         final String oldPassword = game.getPassword();
         String password = request.getParameter(AjaxRequest.PASSWORD);
@@ -65,7 +66,8 @@ public class ChangeGameOptionHandler extends GameWithPlayerHandler {
         if (null != useTimerString && !"".equals(useTimerString)) {
           useTimer = Boolean.valueOf(useTimerString);
         }
-        game.updateGameSettings(scoreLimit, playerLimit, spectatorLimit, cardSets, blanksLimit, password, useTimer);
+        game.updateGameSettings(scoreLimit, playerLimit, spectatorLimit, cardSetIds, blanksLimit,
+            password, useTimer);
 
         // only broadcast an update if the password state has changed, because it needs to change
         // the text on the join button and the sort order
