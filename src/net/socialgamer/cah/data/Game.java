@@ -25,15 +25,12 @@ package net.socialgamer.cah.data;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -107,11 +104,7 @@ public class Game {
   private final Object blackCardLock = new Object();
   private WhiteDeck whiteDeck;
   private GameState state;
-
-  // These are the default values new games get.
-  private int blanksInDeck = 0;
-  private int playerLimit = 6;
-  private int spectatorLimit = 0;
+  private final GameOptions options = new GameOptions();
 
   private int judgeIndex = 0;
 
@@ -155,11 +148,6 @@ public class Game {
   private volatile ScheduledFuture<?> lastScheduledFuture;
   private final ScheduledThreadPoolExecutor globalTimer;
 
-  private int scoreGoal = 8;
-  private final Set<Integer> cardSetIds = new HashSet<Integer>();
-  private String password = "";
-  private boolean useIdleTimer = true;
-
   /**
    * Create a new game.
    * 
@@ -201,7 +189,7 @@ public class Game {
   public void addPlayer(final User user) throws TooManyPlayersException, IllegalStateException {
     logger.info(String.format("%s joined game %d.", user.toString(), id));
     synchronized (players) {
-      if (playerLimit >= 3 && players.size() >= playerLimit) {
+      if (options.playerLimit >= 3 && players.size() >= options.playerLimit) {
         throw new TooManyPlayersException();
       }
       // this will throw IllegalStateException if the user is already in a game, including this one.
@@ -365,7 +353,7 @@ public class Game {
       IllegalStateException {
     logger.info(String.format("%s joined game %d as a spectator.", user.toString(), id));
     synchronized (spectators) {
-      if (spectators.size() >= spectatorLimit) {
+      if (spectators.size() >= options.spectatorLimit) {
         throw new TooManySpectatorsException();
       }
       // this will throw IllegalStateException if the user is already in a game, including this one.
@@ -439,6 +427,29 @@ public class Game {
   }
 
   /**
+   * Sends updated player information about a specific player to all players in the game.
+   * 
+   * @param player
+   *          The player whose information has been changed.
+   */
+  public void notifyPlayerInfoChange(final Player player) {
+    final HashMap<ReturnableData, Object> data = getEventMap();
+    data.put(LongPollResponse.EVENT, LongPollEvent.GAME_PLAYER_INFO_CHANGE.toString());
+    data.put(LongPollResponse.PLAYER_INFO, getPlayerInfo(player));
+    broadcastToPlayers(MessageType.GAME_PLAYER_EVENT, data);
+  }
+
+  /**
+   * Sends updated game information to all players in the game.
+   */
+  private void notifyGameOptionsChanged() {
+    final HashMap<ReturnableData, Object> data = getEventMap();
+    data.put(LongPollResponse.EVENT, LongPollEvent.GAME_OPTIONS_CHANGED.toString());
+    data.put(LongPollResponse.GAME_INFO, getInfo(true));
+    broadcastToPlayers(MessageType.GAME_EVENT, data);
+  }
+
+  /**
    * @return The game's current state.
    */
   public GameState getState() {
@@ -470,27 +481,12 @@ public class Game {
   }
 
   public String getPassword() {
-    return password;
+    return options.password;
   }
 
-  public void updateGameSettings(final int newScoreGoal, final int newMaxPlayers,
-      final int newMaxSpectators, final Collection<Integer> newCardSetIds, final int newMaxBlanks,
-      final String newPassword, final boolean newUseTimer) {
-    this.scoreGoal = newScoreGoal;
-    this.playerLimit = newMaxPlayers;
-    this.spectatorLimit = newMaxSpectators;
-    synchronized (this.cardSetIds) {
-      this.cardSetIds.clear();
-      this.cardSetIds.addAll(newCardSetIds);
-    }
-    this.blanksInDeck = newMaxBlanks;
-    this.password = newPassword;
-    this.useIdleTimer = newUseTimer;
-
-    final HashMap<ReturnableData, Object> data = getEventMap();
-    data.put(LongPollResponse.EVENT, LongPollEvent.GAME_OPTIONS_CHANGED.toString());
-    data.put(LongPollResponse.GAME_INFO, getInfo(true));
-    broadcastToPlayers(MessageType.GAME_EVENT, data);
+  public void updateGameSettings(final GameOptions newOptions) {
+    this.options.update(newOptions);
+    notifyGameOptionsChanged();
   }
 
   /**
@@ -522,34 +518,22 @@ public class Game {
     if (null == host) {
       return null;
     }
-    info.put(GameInfo.HOST, host.toString());
+    info.put(GameInfo.HOST, host.getUser().getNickname());
     info.put(GameInfo.STATE, state.toString());
-    final List<Integer> cardSetIdsCopy;
-    synchronized (this.cardSetIds) {
-      cardSetIdsCopy = new ArrayList<Integer>(this.cardSetIds);
-    }
-    info.put(GameInfo.CARD_SETS, cardSetIdsCopy);
-    info.put(GameInfo.BLANKS_LIMIT, blanksInDeck);
-    info.put(GameInfo.PLAYER_LIMIT, playerLimit);
-    info.put(GameInfo.SPECTATOR_LIMIT, spectatorLimit);
-    info.put(GameInfo.SCORE_LIMIT, scoreGoal);
-    info.put(GameInfo.USE_TIMER, useIdleTimer);
-    if (includePassword) {
-      info.put(GameInfo.PASSWORD, password);
-    }
-    info.put(GameInfo.HAS_PASSWORD, password != null && !password.equals(""));
+    info.put(GameInfo.GAME_OPTIONS, options.serialize(includePassword));
+    info.put(GameInfo.HAS_PASSWORD, options.password != null && !options.password.equals(""));
 
     final Player[] playersCopy = players.toArray(new Player[players.size()]);
     final List<String> playerNames = new ArrayList<String>(playersCopy.length);
     for (final Player player : playersCopy) {
-      playerNames.add(player.toString());
+      playerNames.add(player.getUser().getNickname());
     }
     info.put(GameInfo.PLAYERS, playerNames);
 
     final User[] spectatorsCopy = spectators.toArray(new User[spectators.size()]);
     final List<String> spectatorNames = new ArrayList<String>(spectatorsCopy.length);
     for (final User spectator : spectatorsCopy) {
-      spectatorNames.add(spectator.toString());
+      spectatorNames.add(spectator.getNickname());
     }
     info.put(GameInfo.SPECTATORS, spectatorNames);
 
@@ -569,6 +553,12 @@ public class Game {
       info.add(playerInfo);
     }
     return info;
+  }
+
+  public final List<Player> getPlayers() {
+    final List<Player> copy = new ArrayList<Player>(players.size());
+    copy.addAll(players);
+    return copy;
   }
 
   /**
@@ -640,7 +630,7 @@ public class Game {
           playerStatus = GamePlayerStatus.JUDGE;
         }
         // TODO win-by-x
-        else if (player.getScore() >= scoreGoal) {
+        else if (player.getScore() >= options.scoreGoal) {
           playerStatus = GamePlayerStatus.WINNER;
         } else {
           playerStatus = GamePlayerStatus.IDLE;
@@ -675,16 +665,18 @@ public class Game {
       started = false;
     }
     if (started) {
-      logger.info(String.format("Starting game %d.", id));
+      logger.info(String.format("Starting game %d with card sets %s, %d blanks, %d max players, " +
+          "%d max spectators, %d score limit, players %s.",
+          id, cardSetIds, blanksInDeck, playerLimit, spectatorLimit, scoreGoal, players));
       // do this stuff outside the players lock; they will lock players again later for much less
       // time, and not at the same time as trying to lock users, which has caused deadlocks
-      synchronized (cardSetIds) {
+      synchronized (options.cardSetIds) {
         Session session = null;
         try {
           session = sessionProvider.get();
           @SuppressWarnings("unchecked")
           final List<CardSet> cardSets = session.createQuery("from CardSet where id in (:ids)")
-              .setParameterList("ids", cardSetIds).list();
+              .setParameterList("ids", options.cardSetIds).list();
 
           blackDeck = new BlackDeck(cardSets);
           whiteDeck = new WhiteDeck(cardSets, blanksInDeck);
@@ -704,8 +696,8 @@ public class Game {
   }
 
   public boolean hasBaseDeck() {
-    synchronized (cardSetIds) {
-      if (cardSetIds.isEmpty()) {
+    synchronized (options.cardSetIds) {
+      if (options.cardSetIds.isEmpty()) {
         return false;
       }
 
@@ -714,7 +706,7 @@ public class Game {
         session = sessionProvider.get();
         final Number baseDeckCount = (Number) session
             .createQuery("select count(*) from CardSet where id in (:ids) and base_deck = true")
-            .setParameterList("ids", cardSetIds).uniqueResult();
+            .setParameterList("ids", options.cardSetIds).uniqueResult();
 
         return baseDeckCount.intValue() > 0;
       } catch (final Exception e) {
@@ -785,7 +777,7 @@ public class Game {
     }
 
     // Perhaps figure out a better way to do this...
-    final int playTimer = useIdleTimer ? PLAY_TIMEOUT_BASE
+    final int playTimer = options.useIdleTimer ? PLAY_TIMEOUT_BASE
         + (PLAY_TIMEOUT_PER_CARD * blackCard.getPick()) : Integer.MAX_VALUE;
 
     final HashMap<ReturnableData, Object> data = getEventMap();
@@ -899,8 +891,7 @@ public class Game {
       for (final Player player : roundPlayers) {
         final List<WhiteCard> cards = playedCards.getCards(player);
         if (cards == null || cards.size() < blackCard.getPick()) {
-          logger.info(String.format("Skipping idle player %s in game %d.",
-              player.getUser().toString(), id));
+          logger.info(String.format("Skipping idle player %s in game %d.", player, id));
           player.skipped();
 
           final HashMap<ReturnableData, Object> data = getEventMap();
@@ -1040,7 +1031,7 @@ public class Game {
     state = GameState.JUDGING;
 
     // Perhaps figure out a better way to do this...
-    final int judgeTimer = useIdleTimer ? JUDGE_TIMEOUT_BASE
+    final int judgeTimer = options.useIdleTimer ? JUDGE_TIMEOUT_BASE
         + (JUDGE_TIMEOUT_PER_CARD * playedCards.size() * blackCard.getPick()) : Integer.MAX_VALUE;
 
     final HashMap<ReturnableData, Object> data = getEventMap();
@@ -1434,19 +1425,6 @@ public class Game {
   }
 
   /**
-   * Sends updated player information about a specific player to all players in the game.
-   * 
-   * @param player
-   *          The player whose information has been changed.
-   */
-  public void notifyPlayerInfoChange(final Player player) {
-    final HashMap<ReturnableData, Object> data = getEventMap();
-    data.put(LongPollResponse.EVENT, LongPollEvent.GAME_PLAYER_INFO_CHANGE.toString());
-    data.put(LongPollResponse.PLAYER_INFO, getPlayerInfo(player));
-    broadcastToPlayers(MessageType.GAME_PLAYER_EVENT, data);
-  }
-
-  /**
    * The judge has selected a card. The {@code cardId} passed in may be any white cards's ID for
    * black cards that have multiple selection, however only the first card in the set's ID will be
    * passed around to clients.
@@ -1495,7 +1473,7 @@ public class Game {
     synchronized (roundTimerLock) {
       final SafeTimerTask task;
       // TODO win-by-x option
-      if (cardPlayer.getScore() >= scoreGoal) {
+      if (cardPlayer.getScore() >= options.scoreGoal) {
         task = new SafeTimerTask() {
           @Override
           public void process() {
